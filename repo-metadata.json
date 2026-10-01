@@ -1,0 +1,12 @@
+{
+  "description": "Arabic document OCR parser and structured data extractor with ZATCA QR decoding in pure PHP",
+  "topics": [
+    "eidcloud",
+    "arabic-ocr",
+    "document-parser",
+    "invoice-extractor",
+    "zatca-qr",
+    "ocr-pipeline",
+    "php8"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "eidcloud/arabic-doc-ocr",
+  "description": "Arabic document OCR parser and structured data extractor with ZATCA QR decoding in pure PHP",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Eng. MHD. Shadi AL-Hasan",
+      "email": "shadi@eidcloud.com",
+      "homepage": "https://github.com/shadi0019"
+    }
+  ],
+  "require": {
+    "php": ">=8.2"
+  },
+  "require-dev": {},
+  "autoload": {
+    "psr-4": {
+      "EidCloud\\ArabicDocOcr\\": "src/"
+    }
+  },
+  "bin": [
+    "bin/eidcloud-ar-ocr"
+  ],
+  "scripts": {
+    "test": "php tests/run_tests.php"
+  },
+  "config": {
+    "sort-packages": true
+  },
+  "minimum-stability": "stable"
+}

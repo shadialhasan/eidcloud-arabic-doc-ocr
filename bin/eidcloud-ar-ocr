@@ -1,0 +1,196 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Autoloading
+$autoloadPaths = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/autoload.php',
+];
+
+$loaded = false;
+foreach ($autoloadPaths as $path) {
+    if (file_exists($path)) {
+        require_once $path;
+        $loaded = true;
+        break;
+    }
+}
+
+if (!$loaded) {
+    spl_autoload_register(function ($class) {
+        $prefix = 'EidCloud\\ArabicDocOcr\\';
+        $baseDir = __DIR__ . '/../src/';
+        $len = strlen($prefix);
+        if (strncmp($prefix, $class, $len) !== 0) {
+            return;
+        }
+        $relativeClass = substr($class, $len);
+        $file = $baseDir . str_replace('\\', '/', $relativeClass) . '.php';
+        if (file_exists($file)) {
+            require_once $file;
+        }
+    });
+}
+
+use EidCloud\ArabicDocOcr\DocOcr;
+use EidCloud\ArabicDocOcr\Zatca\TlvDecoder;
+
+function printHelp(): void
+{
+    $appName = "eidcloud-ar-ocr";
+    $version = "1.0.0";
+    echo <<<HELP
+\033[1;36m======================================================================
+  📄 EidCloud Arabic Document OCR & ZATCA Parser CLI (v{$version})
+  Engineered by Eng. MHD. Shadi AL-Hasan
+======================================================================\033[0m
+
+\033[1;33mUSAGE:\033[0m
+  php bin/{$appName} <command> [arguments] [options]
+
+\033[1;33mCOMMANDS:\033[0m
+  \033[1;32mextract <file>\033[0m         Extract text and structured invoice fields from an Arabic PDF/image.
+  \033[1;32mzatca-qr <payload>\033[0m     Decode or validate a ZATCA Phase 1 & 2 Base64 TLV QR string or image.
+  \033[1;32mpreprocess <file>\033[0m      Clean, binarize, and deskew an Arabic scanned image.
+
+\033[1;33mOPTIONS:\033[0m
+  \033[1;32m--json\033[0m                 Output clean JSON format (ideal for API pipelines & stdout).
+  \033[1;32m--decode\033[0m               Decode TLV structure into human-readable key-value fields.
+  \033[1;32m--out <path>\033[0m           Save output result / preprocessed image to specified path.
+  \033[1;32m--no-clean\033[0m             Skip deskew and binarization preprocessing steps.
+  \033[1;32m-h, --help\033[0m             Display this help message and exit.
+  \033[1;32m-v, --version\033[0m          Display application version.
+
+\033[1;33mEXAMPLES:\033[0m
+  php bin/{$appName} extract invoice.pdf --json
+  php bin/{$appName} zatca-qr "AQVBY21l...=" --decode
+  php bin/{$appName} preprocess scan.png --out cleaned_scan.png
+
+HELP;
+}
+
+$args = array_slice($argv, 1);
+
+if (empty($args) || in_array('-h', $args, true) || in_array('--help', $args, true)) {
+    printHelp();
+    exit(0);
+}
+
+if (in_array('-v', $args, true) || in_array('--version', $args, true)) {
+    echo "eidcloud-ar-ocr version 1.0.0\n";
+    exit(0);
+}
+
+$command = $args[0];
+$isJson = in_array('--json', $args, true);
+$isDecode = in_array('--decode', $args, true);
+
+try {
+    $ocr = new DocOcr();
+
+    switch ($command) {
+        case 'extract':
+            $filePath = $args[1] ?? null;
+            if (!$filePath || !file_exists($filePath)) {
+                echo "\033[1;31mError:\033[0m Valid file path required for extraction.\n";
+                exit(1);
+            }
+
+            if (in_array('--no-clean', $args, true)) {
+                $ocr->enablePreprocessing(false);
+            }
+
+            $result = $ocr->process($filePath);
+
+            if ($isJson) {
+                echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+            } else {
+                echo "\033[1;32m=== Arabic Document OCR Extraction Result ===\033[0m\n";
+                echo "File: " . $result['file_name'] . "\n";
+                echo "Engine: " . $result['engine_used'] . "\n";
+                echo "Type: " . ($result['extracted_data']['document_type'] ?? 'Invoice') . "\n";
+                echo "Invoice #: " . ($result['extracted_data']['invoice_number'] ?? 'N/A') . "\n";
+                echo "Date: " . ($result['extracted_data']['date'] ?? 'N/A') . "\n";
+                echo "Vendor: " . ($result['extracted_data']['vendor_name'] ?? 'N/A') . "\n";
+                echo "VAT #: " . ($result['extracted_data']['vat_number'] ?? 'N/A') . "\n";
+                echo "Subtotal: " . ($result['extracted_data']['subtotal'] ?? '0.00') . " " . ($result['extracted_data']['currency'] ?? 'SAR') . "\n";
+                echo "VAT: " . ($result['extracted_data']['tax_amount'] ?? '0.00') . " (" . ($result['extracted_data']['tax_rate'] ?? '15') . "%)\n";
+                echo "Total: \033[1;33m" . ($result['extracted_data']['total_amount'] ?? '0.00') . " " . ($result['extracted_data']['currency'] ?? 'SAR') . "\033[0m\n";
+                
+                if (!empty($result['extracted_data']['line_items'])) {
+                    echo "\n--- Line Items ---\n";
+                    foreach ($result['extracted_data']['line_items'] as $idx => $item) {
+                        echo sprintf(" [%d] %s x %.2f @ %.2f = %.2f\n", $idx + 1, $item['description'], $item['quantity'], $item['unit_price'], $item['total']);
+                    }
+                }
+            }
+            break;
+
+        case 'zatca-qr':
+            $payload = $args[1] ?? null;
+            if (!$payload) {
+                echo "\033[1;31mError:\033[0m Base64 TLV payload string required.\n";
+                exit(1);
+            }
+
+            // If file path is passed, read payload from it
+            if (file_exists($payload)) {
+                $payload = trim((string)file_get_contents($payload));
+            }
+
+            $decoded = TlvDecoder::decode($payload);
+
+            if ($isJson) {
+                echo json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+            } else {
+                echo "\033[1;32m=== ZATCA E-Invoicing QR Code TLV Decoder ===\033[0m\n";
+                echo "Status: " . ($decoded['valid'] ? "\033[1;32mVALID\033[0m" : "\033[1;31mINVALID\033[0m") . "\n";
+                echo "Phase: " . $decoded['phase'] . "\n";
+                echo "Seller: " . ($decoded['seller_name'] ?? 'N/A') . "\n";
+                echo "VAT #: " . ($decoded['vat_number'] ?? 'N/A') . "\n";
+                echo "Timestamp: " . ($decoded['timestamp'] ?? 'N/A') . "\n";
+                echo "Total: " . ($decoded['invoice_total'] ?? 'N/A') . " SAR\n";
+                echo "VAT Total: " . ($decoded['vat_total'] ?? 'N/A') . " SAR\n";
+                if ($decoded['invoice_hash']) {
+                    echo "Invoice Hash (Phase 2): " . substr($decoded['invoice_hash'], 0, 32) . "...\n";
+                }
+                if (!empty($decoded['errors'])) {
+                    echo "\033[1;31mValidation Errors:\033[0m\n";
+                    foreach ($decoded['errors'] as $err) {
+                        echo " - " . $err . "\n";
+                    }
+                }
+            }
+            break;
+
+        case 'preprocess':
+            $filePath = $args[1] ?? null;
+            if (!$filePath || !file_exists($filePath)) {
+                echo "\033[1;31mError:\033[0m Valid image file path required.\n";
+                exit(1);
+            }
+
+            $outKey = array_search('--out', $args, true);
+            $outputPath = ($outKey !== false && isset($args[$outKey + 1])) ? $args[$outKey + 1] : 'preprocessed_output.png';
+
+            $cleaner = new \EidCloud\ArabicDocOcr\Preprocessor\ImageCleaner($filePath);
+            $cleaner->binarize();
+            $angle = $cleaner->deskew();
+            $cleaner->save($outputPath);
+
+            echo "\033[1;32m✓ Document Preprocessing Complete\033[0m\n";
+            echo "Corrected Deskew Angle: " . round($angle, 2) . "°\n";
+            echo "Saved cleaned image to: " . $outputPath . "\n";
+            break;
+
+        default:
+            echo "\033[1;31mUnknown command:\033[0m {$command}\n";
+            printHelp();
+            exit(1);
+    }
+} catch (\Throwable $e) {
+    echo "\033[1;31mError:\033[0m " . $e->getMessage() . "\n";
+    exit(1);
+}
